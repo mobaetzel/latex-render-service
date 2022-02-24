@@ -1,0 +1,7 @@
+/cache/
+/conf/
+/templates/
+/venv/
+/.idea/
+
+*.pyc
