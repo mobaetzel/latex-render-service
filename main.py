@@ -31,7 +31,7 @@ latex_jinja_env = Environment(
     loader=FileSystemLoader(path.join(__DIR__, 'templates'))
 )
 
-# Start the flas app and set the CORS settings.
+# Start the flask app and set the CORS settings.
 app = Flask(__name__)
 CORS(app, origins=__CONF__['server']['origins'])
 
