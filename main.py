@@ -57,7 +57,7 @@ def prepare_dirs() -> None:
 prepare_dirs()
 
 
-@app.route('/<string:template_id>', methods=['POST'])
+@app.route('/render/<string:template_id>', methods=['POST'])
 def render(template_id: str):
     """
     Handle the template rendering.
