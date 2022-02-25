@@ -1,20 +1,22 @@
-from flask import Flask, send_file, request, abort
-from subprocess import run
-from os import path, makedirs
-import pathlib
-from jinja2 import Environment, FileSystemLoader, TemplateNotFound
-from json import dumps
 from hashlib import sha1
+from json import dumps
+from os import path, makedirs
+from pathlib import Path as PathlibPath
+from subprocess import run
 from typing import Dict, Union
-from yaml import safe_load
+
+from flask import Flask, request, abort, send_file
 from flask_cors import CORS
+from jinja2 import Environment, FileSystemLoader, TemplateNotFound
+from yaml import safe_load
 
 # Determine the current directory.
-__DIR__ = pathlib.Path(__file__).parent.resolve()
+__DIR__ = PathlibPath(__file__).parent.resolve()
 
 # Parse the config file for later use.
 with open(path.join(__DIR__, 'conf', 'conf.yml'), 'r') as stream:
     __CONF__ = safe_load(stream)
+__SV__ = __CONF__.get('server', {})
 
 # Prepare jinja environment with special control sequences for the latex environment.
 latex_jinja_env = Environment(
@@ -33,7 +35,7 @@ latex_jinja_env = Environment(
 
 # Start the flask app and set the CORS settings.
 app = Flask(__name__)
-CORS(app, origins=__CONF__['server']['origins'])
+CORS(app, origins=__SV__.get('origins', []))
 
 
 def prepare_dirs() -> None:
@@ -55,26 +57,54 @@ def prepare_dirs() -> None:
 prepare_dirs()
 
 
+@app.route('/<string:template_id>', methods=['POST'])
+def render(template_id: str):
+    """
+    Handle the template rendering.
+    :param template_id: The Id of the template to render.
+    :return: The filename of the rendered template.
+    """
+
+    # Check the authorization.
+    auth = request.headers.get('authorization')
+    if auth not in __CONF__.get('secrets', []):
+        abort(401)
+
+    # Check the payload.
+    request_payload = request.get_json()
+    if request_payload is None:
+        abort(400)
+
+    # Render the template and receive the rendered file path.
+    file_hash = render_template(template_id, request_payload)
+    if file_hash is None:
+        abort(404)
+
+    # Respond the access url of the rendered template.
+    return '{}/cache/{}'.format(__SV__.get('host'), file_hash)
+
+
 def render_template(template_id: str, context: Dict) -> Union[str, None]:
     """
     Render a template based on the template id and the context.
     :param template_id: The id of the template to load.
     :param context: The context dict which is used for rendering.
-    :return: The filepath of the rendered template or None if no template with the given id was found.
+    :return: The filename of the rendered template or None if no template with the given id was found.
     """
 
     # Stringify the context and create a hash for caching.
     context_str = template_id + dumps(context, sort_keys=True, default=str)
-    hash_object = sha1(context_str.encode('utf-8'))
-    hash_hex = hash_object.hexdigest()
+    sha1_hasher = sha1(context_str.encode('utf-8'))
+    context_hash = sha1_hasher.hexdigest()
+    output_filename = context_hash + '.pdf'
 
     # Determine the path of the output file to check or render to.
     # This utilizes the hash for caching.
-    output_path = path.join(__DIR__, 'cache', hash_hex + '.pdf')
+    output_path = path.join(__DIR__, 'cache', output_filename)
 
     # Check if the file already exists and return it accordingly.
     if path.isfile(output_path):
-        return output_path
+        return output_filename
 
     # Determine the name of the input file based in the template id.
     input_template_file = template_id + '.tex'
@@ -94,32 +124,20 @@ def render_template(template_id: str, context: Dict) -> Union[str, None]:
         encoding='utf-8',
     )
 
-    # Return the path of the rendered pdf file.
-    return output_path
+    # Return the filename of the rendered pdf file.
+    return output_filename
 
 
-@app.route('/<string:template_id>', methods=['POST'])
-def render(template_id: str):
+@app.route('/cache/<string:filename>', methods=['GET'])
+def cache(filename: str):
     """
-    Handle the template rendering.
-    :param template_id: The Id of the template to render.
-    :return: A flask response object.
+    Return a cached file based on the filename or 404 if not found.
+    :param filename: The name of the file.
+    :return: The cached file.
     """
-
-    # Check the authorization.
-    auth = request.headers.get('authorization')
-    if auth not in __CONF__['secrets']:
-        abort(401)
-
-    # Check the payload.
-    request_payload = request.get_json()
-    if request_payload is None:
-        abort(400)
-
-    # Render the template and receive the rendered file path.
-    output_path = render_template(template_id, request_payload)
-    if output_path is None:
+    file_path = path.join(__DIR__, 'cache', filename)
+    if not path.isfile(file_path):
         abort(404)
 
-    # Respond the rendered file based on the filepath.
-    return send_file(output_path, attachment_filename=template_id + '.pdf')
+    custom_filename = request.args.get('filename', filename, type=str)
+    return send_file(file_path, attachment_filename=custom_filename)
